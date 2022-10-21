@@ -1,8 +1,7 @@
 from datetime import datetime
-from tarfile import _Bz2ReadableFileobj
 from chat_session import ChatSession
-from custom_exceptions import LoginException, UnauthenticatedException, UnauthorizedParticipentException
-from helpers import generate_session_id
+from custom_exceptions import LoginException, LogoutException, UnauthenticatedException, UnauthorizedParticipentException, UnknownActionException
+from helpers import generate_session_id, StoppableThread
 from settings.settings import Settings
 
 import json
@@ -24,7 +23,22 @@ class ChatRoom:
         self._participants = {}
         print('[*] Chat Server Has Started')
 
+    def _session_printer(self):
+        while True:
+            print("Active Sessions: ")
+            for session in self._sessions:
+                print(session)
+            print()
+
+            print("Participants: ")
+            for participant in self._participants:
+                print(participant)
+            print()
+            time.sleep(10)
+
     def mainloop(self):
+        session_monitor_hander = StoppableThread(target=self._session_printer, args=())
+        session_monitor_hander.start()
         while True:
             try:
                 client, address = self._server.accept()
@@ -34,7 +48,7 @@ class ChatRoom:
                 client_handler.start()
             except KeyboardInterrupt:
                 break
-
+        session_monitor_hander.stop()
         self._server.close()
 
     def login(self, request):
@@ -51,6 +65,15 @@ class ChatRoom:
             return {'username': username, 'session_id': session_id}
         except:
             raise LoginException('Login failed')
+
+    def logut(self, request):
+        try:
+            username = request['username']
+            session_id = request['session_id']
+            del self._sessions[session_id]
+            return f'{username} with session id {session_id} has logout successfully!'
+        except:
+            raise LogoutException('Logout failed')
 
     def lobby(self, request):
         return "function coming soon"
@@ -78,9 +101,11 @@ class ChatRoom:
             now = datetime.datetime.now()
             timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
             keep_alive_msg = {"timestamp": timestamp, "message": "ping", "type": "keep-alive"}
-            self.send_msg(self._participants[session.session_id], json.loads(keep_alive_msg))
+            self.send_msg(self._participants[session.session_id], json.dumps(keep_alive_msg))
             try:
                 response = json.loads(self.receive_msg(self._participants[session.session_id]))
+                if response['session_id'] != session.session_id:
+                    break
                 if counter != 0:
                     counter = 0
             except:
@@ -92,14 +117,17 @@ class ChatRoom:
     def room(self, request, sock):
         action = request['action']
         session = request['session_id']
+
         if action == "join":
             self._participants[session.session_id] = None
             return f'Successfully joined room {self._room_name}'
+
         elif action == 'send':
             if session.session_id in self._participants.keys():
                 self.broadcast(request['message'], session.username)
                 return 'Message sent'
             raise UnauthorizedParticipentException('User is not a member of this room!')
+
         elif action == 'receive':
             if session.session_id not in self._participants.keys():
                 raise UnauthorizedParticipentException('User is not a member of this room!')
@@ -110,12 +138,15 @@ class ChatRoom:
                     self._participants[session.session_id].close()
                 self._participants[session.session_id] = None
             return 'receive channel terminated'
+
         elif action == 'leave':
             if self._participants[session.session_id] is not None:
                 self._participants[session.session_id].close()
             del self._participants[session.session_id] 
             return f'Exited room {self._room_name}'
-        return 'function coming soon'
+
+        else:
+            raise UnknownActionException("Unrecognized action.")
 
 
     def handle_client(self, client, address):
@@ -125,7 +156,9 @@ class ChatRoom:
                 if request['function'] == 'login':
                     output = self.login(request)
                 else:
-                    if 'session_id' not in request.keys:
+                    if 'session_id' not in request.keys():
+                        raise UnauthenticatedException('User not login')
+                    if request['session_id'] is None:
                         raise UnauthenticatedException('User not login')
                     session_id = request['session_id']
                     if session_id not in self._sessions:
@@ -146,12 +179,28 @@ class ChatRoom:
                     'message': {'error':'login_error', 'details': str(ex)},
                     'result': 'failed'
                 }
+            except LogoutException as ex:
+                output = {
+                    'message': {'error':'logout_error', 'details': str(ex)},
+                    'result': 'failed'
+                }
             except UnauthenticatedException as ex:
                 output = {
                     'message': {'error':'authentication_error', 'details': str(ex)},
                     'result': 'failed'
                 }
+            except UnauthorizedParticipentException as ex:
+                output = {
+                    'message': {'error':'unauthorized_participant', 'details': str(ex)},
+                    'result': 'failed'
+                }
+            except UnknownActionException as ex:
+                output = {
+                    'message': {'error':'unknown_action_error', 'details': str(ex)},
+                    'result': 'failed'
+                }
             except Exception as ex:
+                print(traceback.format_exc())
                 output = {
                     'message': {'error':'general_error', 'details': str(ex)},
                     'result': 'failed'
@@ -182,7 +231,7 @@ class ChatRoom:
 
 
 def main():
-    app = ChatServer()
+    app = ChatRoom()
     app.mainloop()
 
 if __name__ == "__main__":
