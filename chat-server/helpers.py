@@ -16,4 +16,4 @@ class StoppableThread(threading.Thread):
         return self._stop_event.is_set()
 
 def generate_session_id(num_bytes = 16):
-    return uuid.UUID(bytes = M2Crypto.m2.rand_bytes(num_bytes))
+    return str(uuid.UUID(bytes = M2Crypto.m2.rand_bytes(num_bytes)))

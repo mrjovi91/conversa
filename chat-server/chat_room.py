@@ -1,4 +1,4 @@
-from datetime import datetime
+import datetime
 from chat_session import ChatSession
 from custom_exceptions import LoginException, LogoutException, UnauthenticatedException, UnauthorizedParticipentException, UnknownActionException
 from helpers import generate_session_id, StoppableThread
@@ -19,7 +19,7 @@ class ChatRoom:
         self._server.bind((settings.server_ip, settings.server_port))
         self._server.listen(settings.max_connections_accepted)
         self._room_name = "Default Room"
-        self._sessions = []
+        self._sessions = {}
         self._participants = {}
         print('[*] Chat Server Has Started')
 
@@ -64,9 +64,10 @@ class ChatRoom:
             self._sessions[session_id] = user_session
             return {'username': username, 'session_id': session_id}
         except:
+            print(traceback.format_exc())
             raise LoginException('Login failed')
 
-    def logut(self, request):
+    def logout(self, request):
         try:
             username = request['username']
             session_id = request['session_id']
@@ -91,7 +92,8 @@ class ChatRoom:
     def broadcast(self, message, username=None):
         chat_packet = self._format_chat_packet(message, username)
         for sock in self._participants.values():
-            self.send_msg(sock, chat_packet)
+            if sock is not None:
+                self.send_msg(sock, json.dumps(chat_packet))
 
     def keep_alive_client_receive_channel(self, session):
         counter = 0
@@ -116,7 +118,7 @@ class ChatRoom:
 
     def room(self, request, sock):
         action = request['action']
-        session = request['session_id']
+        session = self._sessions[request['session_id']]
 
         if action == "join":
             self._participants[session.session_id] = None
@@ -124,6 +126,7 @@ class ChatRoom:
 
         elif action == 'send':
             if session.session_id in self._participants.keys():
+                print(request)
                 self.broadcast(request['message'], session.username)
                 return 'Message sent'
             raise UnauthorizedParticipentException('User is not a member of this room!')
@@ -131,7 +134,10 @@ class ChatRoom:
         elif action == 'receive':
             if session.session_id not in self._participants.keys():
                 raise UnauthorizedParticipentException('User is not a member of this room!')
+            
+            self.send_msg(sock, json.dumps({'message': 'opening channel', 'result': 'success'}))
             self._participants[session.session_id] = sock
+            time.sleep(1)
             self.keep_alive_client_receive_channel(session)
             if session.session_id in self._participants.keys():
                 if self._participants[session.session_id] is not None:
@@ -155,6 +161,7 @@ class ChatRoom:
                 request = json.loads(self.receive_msg(sock))
                 if request['function'] == 'login':
                     output = self.login(request)
+                    result = 'success'
                 else:
                     if 'session_id' not in request.keys():
                         raise UnauthenticatedException('User not login')
@@ -163,55 +170,54 @@ class ChatRoom:
                     session_id = request['session_id']
                     if session_id not in self._sessions:
                         raise UnauthenticatedException('User not login')
-                if request['function'] == 'lobby':
-                    output = self.lobby(request)
-                elif request['function'] == 'room':
-                    output = self.room(request, sock)
-                elif request['function'] == 'logout':
-                    pass
-                else:
-                    output = {
-                        'message': {'error':'unknown_function', 'details': 'Function not found.'},
-                        'result': 'failed'
-                    }
+
+                    if request['function'] == 'lobby':
+                        output = self.lobby(request)
+                        
+                    elif request['function'] == 'room':
+                        output = self.room(request, sock)
+                        result = 'success'
+                    elif request['function'] == 'logout':
+                        output = self.logout(request)
+                        result = 'success'
+                    else:
+                        output = {
+                            'error':'unknown_function', 
+                            'details': 'Function not found.'
+                        }
+                        result = 'failed'
             except LoginException as ex:
-                output = {
-                    'message': {'error':'login_error', 'details': str(ex)},
-                    'result': 'failed'
-                }
+                output = {'error':'login_error', 'details': str(ex)}
+                result =  'failed'
+            
             except LogoutException as ex:
-                output = {
-                    'message': {'error':'logout_error', 'details': str(ex)},
-                    'result': 'failed'
-                }
+                output = {'error':'logout_error', 'details': str(ex)}
+                result = 'failed'
+                
             except UnauthenticatedException as ex:
-                output = {
-                    'message': {'error':'authentication_error', 'details': str(ex)},
-                    'result': 'failed'
-                }
+                output = {'error':'authentication_error', 'details': str(ex)}
+                result = 'failed'
+                
             except UnauthorizedParticipentException as ex:
-                output = {
-                    'message': {'error':'unauthorized_participant', 'details': str(ex)},
-                    'result': 'failed'
-                }
+                output = {'error':'unauthorized_participant', 'details': str(ex)}
+                result = 'failed'
+                
             except UnknownActionException as ex:
-                output = {
-                    'message': {'error':'unknown_action_error', 'details': str(ex)},
-                    'result': 'failed'
-                }
+                output = {'error':'unknown_action_error', 'details': str(ex)}
+                result =  'failed'
             except Exception as ex:
                 print(traceback.format_exc())
-                output = {
-                    'message': {'error':'general_error', 'details': str(ex)},
-                    'result': 'failed'
-                }
-            self.send_msg(sock, json.dumps({'message': output, 'result': 'success'}))
+                output = {'error':'general_error', 'details': str(ex)}
+                result = 'failed'
+                
+            self.send_msg(sock, json.dumps({'message': output, 'result': result}))
             sock.close()
         print(f'[*] {address[0]} has disconnected from the server\r\n')
 
     def send_msg(self, sock, msg):
         msg = msg + '\r\n'
         payload = f'{len(msg):<{self._header_size}}'+msg
+        print(payload)
         sock.send(payload.encode('utf-8'))
 
     def receive_msg(self, sock):

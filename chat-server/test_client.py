@@ -1,5 +1,6 @@
 import datetime
 import json
+from re import M
 import socket
 import traceback
 
@@ -29,6 +30,7 @@ class TestClient:
             'username': self._username
         }
         response = self.process_request(request)
+        print(response)
         if response['result'] == 'failed':
             return False
         self._session_id = response['message']['session_id']
@@ -44,6 +46,7 @@ class TestClient:
         if response['result'] == 'failed':
             return False
         print(response['message'])
+        self._session_id = None
         return True
 
     def join_room(self):
@@ -53,6 +56,7 @@ class TestClient:
             'session_id': self._session_id
         }
         response = self.process_request(request)
+        print(response)
         if response['result'] == 'failed':
             return False
         print(response['message'])
@@ -65,17 +69,12 @@ class TestClient:
             'session_id': self._session_id
         }
         response = self.process_request(request)
+        print(response)
         if response['result'] == 'failed':
             return False
-        print(response['message'])
         return True
 
-    def open_recv_channel(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((settings.server_ip, settings.server_port))
-
-        request = 
-
+    def open_recv_channel(self, sock):
         while True:
             new_event = json.loads(self.receive_msg(sock))
             if new_event['type'] == 'chat_msg':
@@ -93,7 +92,26 @@ class TestClient:
 
     def chat_loop(self):
         print('Starting chat...')
-        incoming_chat_handler = StoppableThread(target=self.open_recv_channel, args=())
+        request = {
+            'function': 'room',
+            'action': 'receive',
+            'session_id': self._session_id
+        }
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((settings.server_ip, settings.server_port))
+        self.send_msg(sock, json.dumps(request))
+
+        #handle unauth error
+        payload = self.receive_msg(sock)
+        print(payload)
+        response = json.loads(payload)
+        print(response)
+        if response['result'] == 'failed':
+            print('Faled to join chat.')
+            return
+
+        incoming_chat_handler = StoppableThread(target=self.open_recv_channel, args=(sock,))
         incoming_chat_handler.start()
         while True:
             msg = input()
@@ -110,6 +128,7 @@ class TestClient:
                 print('ERROR: The message failed to be sent')
         
         incoming_chat_handler.stop()
+        sock.close()
         print('Ending chat...')
 
     def mainloop(self):
@@ -135,6 +154,10 @@ class TestClient:
                 print(self.join_room())
             elif choice == 3:
                 self.chat_loop()
+            elif choice == 4:
+                print(self.leave_room())
+            elif choice == 5:
+                print(self.logout())
             print()
 
     def send_msg(self, sock, msg):
