@@ -1,6 +1,6 @@
 import datetime
 from chat_session import ChatSession
-from custom_exceptions import LoginException, LogoutException, UnauthenticatedException, UnauthorizedParticipentException, UnknownActionException
+from custom_exceptions import JoinLobbyException, JoinRoomException, LoginException, LogoutException, UnauthenticatedException, UnauthorizedParticipentException, UnknownActionException
 from helpers import generate_session_id, StoppableThread
 from settings.settings import Settings
 
@@ -91,9 +91,12 @@ class ChatRoom:
 
     def broadcast(self, message, username=None):
         chat_packet = self._format_chat_packet(message, username)
-        for sock in self._participants.values():
+        for session_id, sock in self._participants.items():
             if sock is not None:
-                self.send_msg(sock, json.dumps(chat_packet))
+                try:
+                    self.send_msg(sock, json.dumps(chat_packet))
+                except:
+                    self._participants[session_id] = None
 
     def keep_alive_client_receive_channel(self, session):
         counter = 0
@@ -121,6 +124,8 @@ class ChatRoom:
         session = self._sessions[request['session_id']]
 
         if action == "join":
+            if session.session_id in self._participants:
+                raise JoinRoomException('Error: User has already joined the room.')
             self._participants[session.session_id] = None
             return f'Successfully joined room {self._room_name}'
 
@@ -141,7 +146,11 @@ class ChatRoom:
             self.keep_alive_client_receive_channel(session)
             if session.session_id in self._participants.keys():
                 if self._participants[session.session_id] is not None:
-                    self._participants[session.session_id].close()
+                    try:
+                        self._participants[session.session_id].close()
+                    except:
+                        pass
+                    del self._participants[session.session_id]
                 self._participants[session.session_id] = None
             return 'receive channel terminated'
 
@@ -186,6 +195,14 @@ class ChatRoom:
                             'details': 'Function not found.'
                         }
                         result = 'failed'
+            except JoinLobbyException as ex:
+                output = {'error':'join_lobby_error', 'details': str(ex)}
+                result =  'failed'
+
+            except JoinRoomException as ex:
+                output = {'error':'join_room_error', 'details': str(ex)}
+                result =  'failed'
+            
             except LoginException as ex:
                 output = {'error':'login_error', 'details': str(ex)}
                 result =  'failed'

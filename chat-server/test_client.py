@@ -129,6 +129,7 @@ class TestClient:
         
         incoming_chat_handler.stop()
         sock.close()
+        del sock
         print('Ending chat...')
 
     def mainloop(self):

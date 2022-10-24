@@ -1,3 +1,9 @@
+class JoinLobbyException(Exception):
+    pass
+
+class JoinRoomException(Exception):
+    pass
+
 class LoginException(Exception):
     pass
 
